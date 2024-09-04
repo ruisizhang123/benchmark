@@ -9,8 +9,9 @@ from torchbenchmark.util.framework.huggingface.model_factory import HuggingFaceA
 
 import torch
 from diffusers import StableDiffusionPipeline, EulerDiscreteScheduler
-
-
+import os
+os.environ["HUGGING_FACE_HUB_TOKEN"] = "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" 
+print('os.environ["HUGGING_FACE_HUB_TOKEN"]', os.environ["HUGGING_FACE_HUB_TOKEN"])
 class Model(BenchmarkModel, HuggingFaceAuthMixin):
     task = COMPUTER_VISION.GENERATION
 
@@ -29,6 +30,7 @@ class Model(BenchmarkModel, HuggingFaceAuthMixin):
         self.pipe = StableDiffusionPipeline.from_pretrained(model_id, scheduler=scheduler)
         self.pipe.to(self.device)
         self.example_inputs = "a photo of an astronaut riding a horse on mars"
+        self.input_tensor = torch.randint(low=0, high=vocab_size, size=(batch_size, sequence_length))
 
     def enable_fp16(self):
         # The model is fp16 by default
@@ -51,7 +53,24 @@ class Model(BenchmarkModel, HuggingFaceAuthMixin):
         self.pipe.text_encoder = module
 
     def train(self):
-        raise NotImplementedError("Train test is not implemented for the stable diffusion model.")
+        self.model.train()
+
+        total_loss = 0
+        self.optimizer.zero_grad()
+
+        # Forward pass
+        image_embedding, text_embedding = self.model(
+            self.image_tensor, self.text_tensor
+        )
+        # Backward pass
+        loss = self.loss_fn(image_embedding, text_embedding)
+        loss.backward()
+        self.optimizer.step()
+
+        total_loss += loss.item()
+
+        # Return the average loss
+        return total_loss / len(self.texts)
 
     def eval(self):
         image = self.pipe(self.example_inputs)

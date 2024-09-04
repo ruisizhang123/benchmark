@@ -7,6 +7,7 @@ from typing import Tuple
 import torch
 
 import torch.nn as nn
+import torchvision
 from torchbenchmark.tasks import NLP
 from torchbenchmark.util.model import BenchmarkModel
 from transformers import GenerationConfig
@@ -51,6 +52,8 @@ class HuggingFaceModel(BenchmarkModel):
 
             self.model_cls, self.model = download_model(name)
             self.model = self.model.to(self.device)
+            if not hasattr(self.model.config, "vocab_size"):
+                self.model.config.vocab_size = self.model.text_model.get_input_embeddings().weight.size()[0]
             self.example_inputs = generate_inputs_for_model(
                 self.model_cls,
                 self.model,
@@ -83,6 +86,16 @@ class HuggingFaceModel(BenchmarkModel):
         else:
             assert False, f"Huggingface model {name} is not supported yet."
 
+        if self.name in ["llava", "phi_3_vision",]:
+            self.example_inputs_image = torch.rand((self.batch_size, 3, 336, 336)).to(self.device)
+            self.example_inputs.update({"pixel_values": self.example_inputs_image})
+        elif self.name in ["moondream"]:
+            self.example_inputs_image = torch.rand((self.batch_size, 3, 378, 378)).to(self.device)
+            self.example_inputs.update({"pixel_values": self.example_inputs_image})
+            self.text_emb = self.model.text_model.get_input_embeddings()
+            self.example_image_embed = self.model.vision_encoder(self.example_inputs["pixel_values"])
+            self.example_text_embed = self.text_emb(self.example_inputs['input_ids'])   
+            self.example_inputs['labels'] = torch.randint(0, self.model.config.vocab_size, (self.batch_size, 1241)).to(self.device)
         if is_training:
             self.model.train()
         else:
@@ -107,8 +120,11 @@ class HuggingFaceModel(BenchmarkModel):
         yield next(generator)
 
     def forward(self):
-        with self.amp_context():
-            outputs = self.model(**self.example_inputs)
+        if self.name in ["moondream"]:
+            outputs = self.model(self.example_inputs)
+        else:
+            with self.amp_context():
+                outputs = self.model(**self.example_inputs)
         return outputs.loss
 
     def backward(self, losses):

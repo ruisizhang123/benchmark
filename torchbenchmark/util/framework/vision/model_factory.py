@@ -57,6 +57,9 @@ class TorchVisionModel(BenchmarkModel):
         elif test == "eval":
             self.model.eval()
 
+        with torch.no_grad():
+            self.example_outputs = (torch.rand_like(self.model(*self.example_inputs)),)
+
         self.amp_context = nullcontext
         if hasattr(self.opt_args, "backend") and self.opt_args.backend == "cudagraph":
             self.real_input = (torch.rand_like(self.example_inputs[0]),)
@@ -93,8 +96,6 @@ class TorchVisionModel(BenchmarkModel):
         return self.model, self.example_inputs
 
     def forward(self):
-        with torch.no_grad():
-            self.example_outputs = (torch.rand_like(self.model(*self.example_inputs)),)
         for data, target in zip(self.example_inputs, self.example_outputs):
             # Alexnet returns non-grad tensors in forward pass
             # Force to call requires_grad_(True) here

@@ -46,12 +46,8 @@ except BaseException:
     HAS_KERNELS = False
 
 from torchbenchmark import add_ld_library_path
-from torchbenchmark.util.kernels.triton_fused_attention import (
-    attention as triton_tutorial_FA2,
-)
-from torchbenchmark.util.kernels.triton_fused_attention import (
-    attention_tma as triton_tutorial_FA2_tma,
-)
+from torchbenchmark.util.kernels.triton_fused_attention import attention as triton_tutorial_FA2
+from torchbenchmark.util.kernels.triton_fused_attention import attention_tma as triton_tutorial_FA2_tma
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.functional import scaled_dot_product_attention as sdpa
 
@@ -60,9 +56,7 @@ from typing import Callable, Optional
 # [Optional] flash_attn v2
 try:
     from .test_fmha_utils import make_packed_qkv
-    from flash_attn.flash_attn_interface import (
-        flash_attn_qkvpacked_func as flash_attn_func,
-    )
+    from flash_attn.flash_attn_interface import flash_attn_qkvpacked_func as flash_attn_func
 except (ImportError, IOError, AttributeError):
     pass
 
@@ -73,7 +67,7 @@ HAS_FLASH_V3 = True
 try:
     torch_lib_path = os.path.join(os.path.dirname(__file__), "lib")
     with add_ld_library_path(torch_lib_path):
-        from flash_attn_interface import flash_attn_func as flash_attn_v3
+        import flashattn_hopper_cuda
 except (ImportError, IOError, AttributeError):
     HAS_FLASH_V3 = False
     pass
@@ -93,7 +87,6 @@ try:
         torch.ops.load_library("//ai_codesign/gen_ai/cutlass-kernels:fmha_forward_lib")
     else:
         from userbenchmark.triton.loader import load_library
-
         load_library("cutlass_kernels/fmha_forward_lib.so")
     colfax_cutlass_fmha = torch.ops.cutlass.fmha_forward
 except (ImportError, IOError, AttributeError):
@@ -107,7 +100,6 @@ try:
     else:
         # causal is not supported right now
         from userbenchmark.triton.loader import load_library
-
         load_library("tk/tk_attn_h100_fwd.so")
         tk_fwd = torch.ops.tk
 except (ImportError, IOError, AttributeError):
@@ -142,9 +134,7 @@ def parse_op_args(args: List[str]):
 class Operator(BenchmarkOperator):
     DEFAULT_PRECISION = "bf16"
 
-    def __init__(
-        self, tb_args: argparse.Namespace, extra_args: Optional[List[str]] = None
-    ):
+    def __init__(self, tb_args: argparse.Namespace, extra_args: Optional[List[str]] = None):
         super().__init__(tb_args, extra_args)
         self.use_cuda_graphs = False
         args = parse_op_args(self.extra_args)
@@ -223,7 +213,7 @@ class Operator(BenchmarkOperator):
         q = q.transpose(1, 2).contiguous()
         k = k.transpose(1, 2).contiguous()
         v = v.transpose(1, 2).contiguous()
-        fn = lambda: flash_attn_v3(q, k, v, self.sm_scale, self.causal)
+        fn = lambda: flashattn_hopper_cuda.fwd(q, k, v, None, self.sm_scale, self.causal)
         return fn
 
     @register_benchmark()
@@ -314,32 +304,23 @@ class Operator(BenchmarkOperator):
         default_scale = 1.0 / math.sqrt(float(self.D_HEAD))
         colfax_q, colfax_k, colfax_v = self.colfax_cutlass_preprocess(q, k, v)
         return lambda: colfax_cutlass_fmha(
-            self.N_CTX,
-            self.N_CTX,
-            self.BATCH,
-            colfax_q,
-            colfax_k,
-            colfax_v,
-            default_scale,
+            self.N_CTX, self.N_CTX, self.BATCH, colfax_q, colfax_k, colfax_v, default_scale
         )
 
     @register_benchmark(enabled=False)
     def tk(self, q, k, v):
         o = torch.zeros_like(v)
-
         def tk_dispatcher():
             if self.causal:
                 tk_fwd_causal.attention_forward_causal(q, k, v, o)
             else:
                 tk_fwd.attention_forward(q, k, v, o)
             return o
-
         return tk_dispatcher
 
     @register_benchmark(enabled=False, label=f"cudnn_{torch.backends.cudnn.version()}")
     def cudnn(self, q, k, v):
         os.environ["TORCH_CUDNN_SDPA_ENABLED"] = "1"
-
         def sdpa_flash_attention(q, k, v):
             with sdpa_kernel([SDPBackend.CUDNN_ATTENTION]):
                 return sdpa(
@@ -349,31 +330,12 @@ class Operator(BenchmarkOperator):
                     is_causal=self.causal,
                     scale=self.sm_scale,
                 )
-
         return lambda: sdpa_flash_attention(
             q,
             k,
             v,
         )
 
-    @register_benchmark()
-    def flex_attention(self, q, k, v):
-        from torch.nn.attention.flex_attention import flex_attention, create_block_mask
-
-        def causal_mask(b, h, q_idx, kv_idx):
-            return q_idx >= kv_idx
-
-        flex_attention = torch.compile(flex_attention, dynamic=False)
-
-        if self.causal:
-            B, H, S, D = q.shape
-            block_mask = create_block_mask(
-                causal_mask, B=None, H=None, Q_LEN=S, KV_LEN=S
-            )
-        else:
-            block_mask = None
-
-        return lambda: flex_attention(q, k, v, block_mask=block_mask)
 
     @register_metric()
     def tflops(

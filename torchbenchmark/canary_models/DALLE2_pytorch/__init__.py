@@ -16,15 +16,14 @@ class Model(BenchmarkModel):
 
     def __init__(self, test, device, batch_size=None, extra_args=[]):
         super().__init__(test=test, device=device, batch_size=batch_size, extra_args=extra_args)
-
+        print("start to work with new dalle2")
         if self.device == "cpu":
             raise NotImplementedError("DALL-E 2 Not Supported on CPU")
     
         self.clip = OpenAIClipAdapter().to(self.device)
-
         self.sample_text = self.example_input = torch.randint(0, 49408, (self.batch_size, 256)).to(self.device)
-        self.sample_images = torch.randn(self.batch_size, 3, 256, 256).to(self.device)
-
+        self.sample_images = torch.randn(self.batch_size, 3, 256, 256).to(torch.bfloat16).to(self.device)
+ 
         prior_network = DiffusionPriorNetwork(
             dim = 512,
             depth = 6,
@@ -32,10 +31,10 @@ class Model(BenchmarkModel):
             heads = 8
         ).to(self.device)
 
-        diffusion_prior = DiffusionPrior(
+        self.diffusion_prior = DiffusionPrior(
             net = prior_network,
             clip = self.clip,
-            timesteps = 1,
+            timesteps = 100,
             cond_drop_prob = 0.2
         ).to(self.device)
 
@@ -57,7 +56,7 @@ class Model(BenchmarkModel):
             dim_mults = (1, 2, 4, 8, 16)
         ).to(self.device)
 
-        decoder = Decoder(
+        self.decoder = Decoder(
             unet = (unet1, unet2),
             image_sizes = (128, 256),
             clip = self.clip,
@@ -67,15 +66,28 @@ class Model(BenchmarkModel):
             text_cond_drop_prob = 0.5
         ).to(self.device)
 
-        self.model = DALLE2(prior=diffusion_prior, decoder=decoder).to(self.device)
-
+        self.model = DALLE2(prior=self.diffusion_prior, decoder=self.decoder).to(self.device)
+        self.model.to(torch.bfloat16)
         if test == "train":
             self.model.prior.train()
             self.model.decoder.train()
-        elif test == "eval":
-            self.model.prior.eval()
-            self.model.decoder.eval()
+        #elif test == "eval":
+        #    self.model.prior.eval()
+        #    self.model.decoder.eval()
 
+        self.optimizer1 = torch.optim.AdamW(
+            list(self.model.prior.parameters()),
+            lr=5.0e-4,
+            weight_decay=1.0e-4,
+            eps=1.0e-6,
+        )
+
+        self.optimizer2 = torch.optim.AdamW(
+            list(self.model.decoder.parameters()),
+            lr=5.0e-4,
+            weight_decay=1.0e-4,
+            eps=1.0e-6,
+        )
     def get_module(self):
         return self.model, (self.example_input,)
 
@@ -88,20 +100,7 @@ class Model(BenchmarkModel):
         return (images,)
 
     def train(self):
-        # openai pretrained clip - defaults to ViT-B/32
-        clip = self.clip
-
         # prior networks (with transformer)
-        diffusion_prior = self.model.prior
-
-        loss = diffusion_prior(self.sample_text, self.sample_images)
+        loss =  self.model(self.sample_text, self.sample_images)
         loss.backward()
-
-        # decoder (with unet)
-        decoder = self.model.decoder
-
-        loss = decoder(self.sample_images, self.sample_text, unet_number=1)
-        loss.backward()
-
-        loss = decoder(self.sample_images, self.sample_text, unet_number=2)
-        loss.backward()
+        return loss.item()

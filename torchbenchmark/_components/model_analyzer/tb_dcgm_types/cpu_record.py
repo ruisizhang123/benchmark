@@ -13,6 +13,8 @@ class CPURecord(Record):
         ----------
         value : float
             The value of the CPU metrtic
+        device_uuid : str
+            A dummy parameter to pass record aggregator.
         timestamp : int
             The timestamp for the record in nanoseconds
         """

@@ -10,8 +10,6 @@ class Model(HuggingFaceModel):
     def __init__(self, test, device, batch_size=None, extra_args=[]):
         super().__init__(name="moondream", test=test, device=device, batch_size=batch_size, extra_args=extra_args)
 
-    def train(self):
-        return NotImplementedError("Not implemented")
 
     def eval(self):
         super().eval()

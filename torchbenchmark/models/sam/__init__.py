@@ -9,20 +9,22 @@ import cv2
 from torchbenchmark.tasks import COMPUTER_VISION
 import torch
 import os
+from torch import optim
 
 
 class Model(BenchmarkModel):
     task = COMPUTER_VISION.SEGMENTATION
     DEFAULT_EVAL_BSIZE = 32
-
+    DEFAULT_EVAL_CUDA_PRECISION = "fp16"
     def __init__(self, test, device, batch_size=1, extra_args=[]):
         super().__init__(
             test=test, device=device, batch_size=batch_size, extra_args=extra_args
         )
-
+        print("start to work with sam")
         # Checkpoint options are here https://github.com/facebookresearch/segment-anything#model-checkpoints
         data_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".data")
         sam_checkpoint = os.path.join(data_folder, "sam_vit_h_4b8939.pth")
+        print("sam_checkpoint", sam_checkpoint)
         if not os.path.exists(sam_checkpoint):
             from torchbenchmark.util.framework.fb.installer import install_model_weights
             sam_checkpoint = install_model_weights(self.name)
@@ -32,34 +34,52 @@ class Model(BenchmarkModel):
         self.model.to(device=device)
         data_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".data")
 
-        image_path = os.path.join(data_folder, "truck.jpg")
-        if not os.path.exists(image_path):
-            from torchbenchmark.util.framework.fb.installer import install_data
-            image_path = os.path.join(install_data("truck"), "truck.jpg")
-        self.image = cv2.imread(image_path)
-        self.image = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
-        self.sample_image = torch.randn((3, 256, 256)).to(device)
+        self.loss_fn = torch.nn.CrossEntropyLoss()
+        self.optimizer = optim.RMSprop(
+            self.model.parameters(), lr=1e-5, weight_decay=1e-8, momentum=0.9
+        )
 
-    def get_module(self):
-        example_input = [
+        print("self.batch_size", self.batch_size)
+        self.sample_image = torch.rand(
+            (self.batch_size, 3, 256, 256), dtype=torch.bfloat16
+        ).to(self.device)
+
+        self.sample_masks = torch.randint(
+                0, 1, (self.batch_size, 1, 256, 256), dtype=torch.bfloat16
+            ).to(self.device)
+
+        self.sample_masks_base = torch.randint(
+                0, 1, (self.batch_size, 1, 256, 256), dtype=torch.bfloat16
+            ).to(self.device)
+
+        self.example_input = [
             {
-                "image": self.sample_image,
+                "image": x,
                 "original_size": (256, 256),
-            }
+                "mask_inputs": y
+            } for x, y in zip(self.sample_image, self.sample_masks)
         ]
 
-        multimask_output = False
-        return self.model, (example_input, multimask_output)
+        self.multimask_output = False
+
+        print("end work with sam")
+    def get_module(self):
+        return self.model, (self.example_input, self.multimask_output)
 
     def train(self):
-        error_msg = """
-            As of May 17, 2023
-            Some base VIT checkpoints are available for SAM but getting the dataset
-            requires a research license. It's easy to make up a training loop on random
-            data and if that's interesting please let @msaroufim know
-            https://github.com/facebookresearch/segment-anything#dataset
-        """
-        return NotImplementedError(error_msg)
+        self.model.train()
+        
+        total_loss = 0
+        self.optimizer.zero_grad()
+        preidcts = self.model(self.example_input, self.multimask_output)
+        loss = self.loss_fn(preidcts, self.sample_masks_base)
+        loss.backward()
+        self.optimizer.step()
+
+        total_loss += loss.item()
+
+        # Return the average loss
+        return total_loss
 
     def eval(self):
         # To test for bfloat16 uncomment the below line

@@ -116,7 +116,7 @@ HUGGINGFACE_MODELS = {
     "llava": (
         512,
         512,
-        'AutoConfig.from_pretrained("liuhaotian/llava-v1.5-13b")',
+        'AutoConfig.from_pretrained("llava-hf/llava-1.5-13b-hf")',
         "LlavaForConditionalGeneration",
     ),
     "llama_v2_7b": (
@@ -161,11 +161,17 @@ HUGGINGFACE_MODELS = {
         'AutoConfig.from_pretrained("microsoft/phi-2", trust_remote_code=True)',
         "AutoModelForCausalLM",
     ),
+    "phi_3_vision": (
+        512,
+        512,
+        'AutoConfig.from_pretrained("microsoft/Phi-3.5-vision-instruct", trust_remote_code=True, revision="2024-08-26")',
+        "AutoModelForCausalLM",
+    ),
     "moondream": (
         512,
         512,
-        'PhiConfig.from_pretrained("vikhyatk/moondream1")',
-        "PhiForCausalLM",
+        'AutoConfig.from_pretrained("vikhyatk/moondream2", trust_remote_code=True)',
+        "AutoModelForCausalLM",
     ),
     # as per this page https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.1 trust_remote_code=True is not required
     "mistral_7b_instruct": (
@@ -186,6 +192,12 @@ HUGGINGFACE_MODELS = {
         'AutoConfig.from_pretrained("microsoft/Orca-2-13b")',
         "AutoModelForCausalLM",
     ),
+    "runaway_diffusion": (
+        512,
+        512,
+        'AutoConfig.from_pretrained("microsoft/Orca-2-13b")',
+        "StableDiffusionPipeline",
+    ),
 }
 
 CPU_INPUT_SLICE = {
@@ -203,6 +215,9 @@ HUGGINGFACE_MODELS_REQUIRING_TRUST_REMOTE_CODE = [
     "phi_2",
     "hf_Yi",
     "hf_mixtral",
+    "runaway_diffusion",
+    "phi_3_vision",
+    "moondream"
 ]
 
 HUGGINGFACE_MODELS_SGD_OPTIMIZER = [
@@ -304,12 +319,16 @@ def download_model(model_name):
     config = eval(HUGGINGFACE_MODELS[model_name][2])
     model_cls = getattr(transformers, HUGGINGFACE_MODELS[model_name][3])
     kwargs = {}
-    if model_name in HUGGINGFACE_MODELS_REQUIRING_TRUST_REMOTE_CODE:
-        kwargs["trust_remote_code"] = True
-    if hasattr(model_cls, "from_config"):
-        model = model_cls.from_config(config, **kwargs)
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    if model_name == "moondream":
+        model = AutoModelForCausalLM.from_pretrained("vikhyatk/moondream2", trust_remote_code=True, revision="2024-08-26")
     else:
-        model = model_cls(config, **kwargs)
+        if model_name in HUGGINGFACE_MODELS_REQUIRING_TRUST_REMOTE_CODE:
+            kwargs["trust_remote_code"] = True
+        if hasattr(model_cls, "from_config"):
+            model = model_cls.from_config(config, **kwargs)
+        else:
+            model = model_cls(config, **kwargs)
     return model_cls, model
 
 
@@ -318,6 +337,17 @@ def generate_optimizer_for_model(model, model_name):
 
     if model_name in HUGGINGFACE_MODELS_SGD_OPTIMIZER:
         return optim.SGD(model.parameters(), lr=0.001)
+
+    '''
+    if model_name == "moondream":
+        return optim.Adam(
+            list(model.vision_encoder.parameters()) + list(model.text_model.parameters()),
+            lr=0.001,
+            # TODO resolve https://github.com/pytorch/torchdynamo/issues/1083
+            capturable=bool(int(os.getenv("ADAM_CAPTURABLE", 0))),
+        )
+    else:
+    '''
     return optim.Adam(
         model.parameters(),
         lr=0.001,
