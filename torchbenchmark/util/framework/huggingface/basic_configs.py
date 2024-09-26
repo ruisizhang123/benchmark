@@ -4,6 +4,7 @@ from typing import List
 
 import torch
 import transformers
+from transformers import MllamaForConditionalGeneration, AutoProcessor
 
 HUGGINGFACE_MODELS = {
     # 'name': (train_max_length, eval_max_length, config, model)
@@ -192,11 +193,12 @@ HUGGINGFACE_MODELS = {
         'AutoConfig.from_pretrained("microsoft/Orca-2-13b")',
         "AutoModelForCausalLM",
     ),
-    "runaway_diffusion": (
+    # model will be manually downloaded in download_model
+    "llama3_2_11B": (
         512,
         512,
-        'AutoConfig.from_pretrained("microsoft/Orca-2-13b")',
-        "StableDiffusionPipeline",
+        'AutoConfig.from_pretrained("meta-llama/Llama-3.2-11B-Vision")',
+        "MllamaForConditionalGeneration",
     ),
 }
 
@@ -313,16 +315,16 @@ def download_model(model_name):
         pattern = r"([A-Za-z0-9_]*)[\(\.].*"
         m = re.match(pattern, config_cls_ctor)
         return m.groups()[0]
-
     config_cls_name = _extract_config_cls_name(HUGGINGFACE_MODELS[model_name][2])
     exec(f"from transformers import {config_cls_name}")
     config = eval(HUGGINGFACE_MODELS[model_name][2])
     model_cls = getattr(transformers, HUGGINGFACE_MODELS[model_name][3])
-    kwargs = {}
+    
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    if model_name == "moondream":
-        model = AutoModelForCausalLM.from_pretrained("vikhyatk/moondream2", trust_remote_code=True, revision="2024-08-26")
+    if model_name == "llama3_2_11B":
+        model = MllamaForConditionalGeneration.from_pretrained("meta-llama/Llama-3.2-11B-Vision")
     else:
+        kwargs = {}
         if model_name in HUGGINGFACE_MODELS_REQUIRING_TRUST_REMOTE_CODE:
             kwargs["trust_remote_code"] = True
         if hasattr(model_cls, "from_config"):
