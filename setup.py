@@ -7,6 +7,11 @@ setup(
     author="PyTorch Team",
     url="https://github.com/pytorch/benchmark",
     packages=find_packages(include=["torchbenchmark*", "userbenchmark*"]),
+    package_data={
+        'torchbenchmark': ['**/*.txt'],
+        'userbenchmark': ['**/*.txt'],   
+    },
+    include_package_data=True,
     classifiers=[
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
